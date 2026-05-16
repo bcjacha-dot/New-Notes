@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Notes validation
+    function isValidNote(data) {
+      return data.keys().hasAll(['title', 'content', 'userId', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() <= 200
+        && data.content is string && data.content.size() <= 10000
+        && data.userId == request.auth.uid
+        && (data.get('tags', []) is list)
+        && (data.get('tags', []).size() <= 20)
+        && (data.get('category', '') is string && data.get('category', '').size() <= 100)
+        && (data.get('summary', '') is string && data.get('summary', '').size() <= 1000)
+        && (data.get('isPinned', false) is bool);
+    }
+
+    // User Profile validation
+    function isValidProfile(data) {
+      return data.keys().hasAll(['email'])
+        && data.email is string && data.email.size() <= 255
+        && (data.get('displayName', '') is string && data.get('displayName', '').size() <= 100)
+        && (data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 1000);
+    }
+
+    // Notes Collection
+    match /notes/{noteId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && isValidId(noteId)
+        && isValidNote(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && existing().userId == request.auth.uid
+        && isValidNote(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // User Private Data
+    match /users/{userId}/private/{document=**} {
+       allow read, write: if isOwner(userId);
+    }
+
+    match /users/{userId}/private/profile {
+      allow get: if isOwner(userId);
+      
+      allow create: if isOwner(userId)
+        && isValidProfile(incoming());
+
+      allow update: if isOwner(userId)
+        && isValidProfile(incoming())
+        && incoming().email == existing().email;
+    }
+  }
+}
